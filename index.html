@@ -2,11 +2,26 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>The numbers Mason!</title>
+  <title>CSV Analysis with Pyodide</title>
   <style>
     body {
       font-family: Arial, sans-serif;
       margin: 2em;
+    }
+    #loading {
+      color: #555;
+      margin-bottom: 1em;
+    }
+    #drop-area {
+      border: 2px dashed #ccc;
+      padding: 20px;
+      text-align: center;
+      margin-bottom: 1em;
+      cursor: pointer;
+      color: #777;
+    }
+    #drop-area.hover {
+      background-color: #eee;
     }
     #results {
       margin-top: 1em;
@@ -14,65 +29,151 @@
       border: 1px solid #ddd;
       background-color: #f9f9f9;
     }
-    #loading {
-      color: #555;
-      margin-bottom: 1em;
-    }
   </style>
+  <!-- Load Pyodide from CDN -->
   <script src="https://cdn.jsdelivr.net/pyodide/v0.23.0/full/pyodide.js"></script>
 </head>
 <body>
-  <h1>Pyodide CSV Upload Example</h1>
+  <h1>CSV Analysis with Pyodide</h1>
   <div id="loading">Loading Pyodide, please wait...</div>
-  <input type="file" id="csvInput" accept=".csv" />
+
+  <!-- Hidden file input for fallback (triggered by clicking the drop area) -->
+  <input type="file" id="csvInput" accept=".csv" style="display:none;" />
+
+  <!-- Drag & Drop Area -->
+  <div id="drop-area">
+    Drag & drop your CSV file here, or click to select.
+  </div>
+
+  <!-- Results will be displayed here -->
   <div id="results"></div>
 
   <script>
-    // Global variable for Pyodide instance
     let pyodideInstance = null;
 
     // Asynchronously load Pyodide
     async function loadPyodideAndPackages() {
       pyodideInstance = await loadPyodide();
-      document.getElementById("loading").innerText = "Pyodide loaded. You can now upload a CSV file.";
+      // Inform the user that Pyodide is ready
+      document.getElementById("loading").innerText = "Pyodide loaded. Ready to process CSV files.";
     }
-
     loadPyodideAndPackages();
 
-    // Listen for CSV file uploads
-    document.getElementById("csvInput").addEventListener("change", async (event) => {
-      const file = event.target.files[0];
-      if (!file) return;
-
-      // Read the file as text
-      const text = await file.text();
-
-      // Pass the CSV text to Python and use Pandas to process it.
-      // For now, we will simply read the CSV and display its headers and first few rows.
-      pyodideInstance.globals.set("csv_text", text);
+    // Process CSV text: read CSV, run regression (if applicable), and display results.
+    async function processCSV(csvText) {
+      // Pass CSV text to Python
+      pyodideInstance.globals.set("csv_text", csvText);
       await pyodideInstance.runPythonAsync(`
-import io
+import io, base64
 import pandas as pd
+import matplotlib.pyplot as plt
+from sklearn.linear_model import LinearRegression
 
-# Read CSV from the uploaded text
+# Read the CSV file
 df = pd.read_csv(io.StringIO(csv_text))
 
-# Extract headers and a preview (first 5 rows) of the DataFrame
+# Get CSV headers and preview HTML
 headers = list(df.columns)
 preview = df.head().to_html()
+
+# Initialize regression result variables
+r2 = None
+coef = None
+intercept = None
+img_data = None
+
+# Check if the expected columns exist
+if 'Value1' in df.columns and 'Value2' in df.columns:
+    # Prepare data for linear regression: Value1 -> independent, Value2 -> dependent
+    X = df[['Value1']].values
+    y = df['Value2'].values
+    model = LinearRegression()
+    model.fit(X, y)
+    y_pred = model.predict(X)
+    r2 = model.score(X, y)
+    coef = model.coef_[0]
+    intercept = model.intercept_
+    
+    # Create a scatter plot and regression line
+    plt.figure(figsize=(6,4))
+    plt.scatter(X, y, color='blue', label='Data')
+    plt.plot(X, y_pred, color='red', label='Fit')
+    plt.xlabel('Value1')
+    plt.ylabel('Value2')
+    plt.title('Linear Regression: Value1 vs Value2')
+    plt.legend()
+    buf = io.BytesIO()
+    plt.savefig(buf, format='png')
+    buf.seek(0)
+    img_data = base64.b64encode(buf.getvalue()).decode('utf-8')
+    plt.close()
       `);
 
-      // Retrieve the Python variables to JavaScript
+      // Retrieve Python variables in JavaScript
       const headers = pyodideInstance.globals.get("headers").toJs();
       const preview = pyodideInstance.globals.get("preview");
+      const r2 = pyodideInstance.globals.get("r2");
+      const coef = pyodideInstance.globals.get("coef");
+      const intercept = pyodideInstance.globals.get("intercept");
+      const img_data = pyodideInstance.globals.get("img_data");
 
-      // Display the results on the page
-      document.getElementById("results").innerHTML = `
+      // Build the HTML to display results
+      let resultHTML = `
         <h2>CSV Headers:</h2>
         <p>${headers.join(", ")}</p>
         <h2>Preview (First 5 Rows):</h2>
         ${preview}
       `;
+      if (r2 !== null && coef !== null && intercept !== null && img_data !== null) {
+        resultHTML += `
+          <h2>Linear Regression (Value1 vs Value2):</h2>
+          <p><strong>Coefficient:</strong> ${coef}</p>
+          <p><strong>Intercept:</strong> ${intercept}</p>
+          <p><strong>R-squared:</strong> ${r2}</p>
+          <img src="data:image/png;base64,${img_data}" alt="Regression Plot" style="max-width:100%; height:auto;" />
+        `;
+      } else {
+        resultHTML += `<p>No regression performed. Ensure your CSV has columns named "Value1" and "Value2".</p>`;
+      }
+      document.getElementById("results").innerHTML = resultHTML;
+    }
+
+    // Set up the file input change event (for when a file is selected via the dialog)
+    document.getElementById("csvInput").addEventListener("change", async (event) => {
+      const file = event.target.files[0];
+      if (file) {
+        const text = await file.text();
+        processCSV(text);
+      }
+    });
+
+    // Drag & Drop functionality
+    const dropArea = document.getElementById("drop-area");
+
+    dropArea.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      dropArea.classList.add("hover");
+    });
+
+    dropArea.addEventListener("dragleave", (e) => {
+      e.preventDefault();
+      dropArea.classList.remove("hover");
+    });
+
+    dropArea.addEventListener("drop", (e) => {
+      e.preventDefault();
+      dropArea.classList.remove("hover");
+      const file = e.dataTransfer.files[0];
+      if (file) {
+        file.text().then((text) => {
+          processCSV(text);
+        });
+      }
+    });
+
+    // Allow clicking the drop area to open the file selector
+    dropArea.addEventListener("click", () => {
+      document.getElementById("csvInput").click();
     });
   </script>
 </body>
