@@ -1,180 +1,338 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
-  <meta charset="UTF-8">
-  <title>CSV Analysis with Pyodide</title>
-  <style>
-    body {
-      font-family: Arial, sans-serif;
-      margin: 2em;
-    }
-    #loading {
-      color: #555;
-      margin-bottom: 1em;
-    }
-    #drop-area {
-      border: 2px dashed #ccc;
-      padding: 20px;
-      text-align: center;
-      margin-bottom: 1em;
-      cursor: pointer;
-      color: #777;
-    }
-    #drop-area.hover {
-      background-color: #eee;
-    }
-    #results {
-      margin-top: 1em;
-      padding: 1em;
-      border: 1px solid #ddd;
-      background-color: #f9f9f9;
-    }
-  </style>
-  <!-- Load Pyodide from CDN -->
-  <script src="https://cdn.jsdelivr.net/pyodide/v0.23.0/full/pyodide.js"></script>
+    <meta charset="UTF-8">
+    <title>The Numbers Mason - CSV Analysis</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 2em;
+        }
+
+        #loading {
+            color: #555;
+            margin-bottom: 1em;
+        }
+
+        #drop-area {
+            border: 2px dashed #ccc;
+            padding: 20px;
+            text-align: center;
+            margin-bottom: 1em;
+            cursor: pointer;
+            color: #777;
+        }
+
+        #drop-area.hover {
+            background-color: #eee;
+        }
+
+        #results {
+            margin-top: 1em;
+            padding: 1em;
+            border: 1px solid #ddd;
+            background-color: #f9f9f9;
+        }
+
+        #python-console {
+            border: 1px solid #aaa;
+            background-color: #1e1e1e;
+            color: #dcdcdc;
+            font-family: monospace;
+            padding: 10px;
+            margin-top: 1em;
+            max-height: 200px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+        }
+
+        #column-selection {
+            margin-top: 1em;
+            padding: 1em;
+            border: 1px solid #ddd;
+            background-color: #f0f8ff;
+        }
+
+        table {
+            border-collapse: collapse;
+            width: 100%;
+        }
+
+        table,
+        th,
+        td {
+            border: 1px solid #aaa;
+            padding: 0.5em;
+        }
+
+        button {
+            padding: 0.5em 1em;
+            margin-top: 1em;
+            font-size: 1em;
+        }
+    </style>
+    <!-- Load Pyodide from CDN -->
+    <script src="https://cdn.jsdelivr.net/pyodide/v0.23.0/full/pyodide.js"></script>
 </head>
+
 <body>
-  <h1>CSV Analysis with Pyodide</h1>
-  <div id="loading">Loading Pyodide, please wait...</div>
+    <h1>The Numbers Mason - CSV Analysis</h1>
+    <div id="loading">Loading Pyodide, please wait...</div>
 
-  <!-- Hidden file input for fallback (triggered by clicking the drop area) -->
-  <input type="file" id="csvInput" accept=".csv" style="display:none;" />
+    <!-- Python Console Output -->
+    <h2>Python Console</h2>
+    <div id="python-console"></div>
 
-  <!-- Drag & Drop Area -->
-  <div id="drop-area">
-    Drag & drop your CSV file here, or click to select.
-  </div>
+    <!-- Hidden file input for fallback -->
+    <input type="file" id="csvInput" accept=".csv" style="display:none;" />
 
-  <!-- Results will be displayed here -->
-  <div id="results"></div>
+    <!-- Drag & Drop Area -->
+    <div id="drop-area">
+        Drag & drop your CSV file here, or click to select.
+    </div>
 
-  <script>
-    let pyodideInstance = null;
+    <!-- Results: CSV preview and regression results -->
+    <div id="results">
+        <h2>CSV Preview</h2>
+        <div id="csv-preview">No CSV loaded.</div>
+        <div id="regression-results"></div>
+    </div>
 
-    // Asynchronously load Pyodide
-    async function loadPyodideAndPackages() {
-      pyodideInstance = await loadPyodide();
-      // Inform the user that Pyodide is ready
-      document.getElementById("loading").innerText = "Pyodide loaded. Ready to process CSV files.";
-    }
-    loadPyodideAndPackages();
+    <!-- Column selection area -->
+    <div id="column-selection">
+        <!-- Will be populated with feature and target selectors and the Run Regression button -->
+    </div>
 
-    // Process CSV text: read CSV, run regression (if applicable), and display results.
-    async function processCSV(csvText) {
-      // Pass CSV text to Python
-      pyodideInstance.globals.set("csv_text", csvText);
-      await pyodideInstance.runPythonAsync(`
-import io, base64
+    <script>
+        let pyodideInstance = null;
+
+        // Helper function: Append text to our Python Console UI
+        function logToConsole(text) {
+            const consoleEl = document.getElementById("python-console");
+            consoleEl.textContent += text;
+            // Auto-scroll to the bottom
+            consoleEl.scrollTop = consoleEl.scrollHeight;
+        }
+
+        // Asynchronously load Pyodide and required packages
+        async function loadPyodideAndPackages() {
+            pyodideInstance = await loadPyodide();
+
+            // Set callbacks to capture Python stdout and stderr messages
+            pyodideInstance.setStdout({
+                batched: (s) => logToConsole(s)
+            });
+            pyodideInstance.setStderr({
+                batched: (s) => logToConsole("ERROR: " + s)
+            });
+
+            // List of packages to load (with logging)
+            const packages = ["pandas", "matplotlib", "scikit-learn"];
+            for (let pkg of packages) {
+                logToConsole(`Loading package: ${pkg}...\n`);
+                await pyodideInstance.loadPackage(pkg);
+                logToConsole(`${pkg} loaded.\n`);
+            }
+
+            document.getElementById("loading").innerText = "Pyodide loaded. Ready to process CSV files.";
+        }
+        loadPyodideAndPackages();
+
+        // Update UI with CSV preview and column selection controls.
+        function updateUI(headers, previewHTML) {
+            // Update CSV preview section
+            document.getElementById("csv-preview").innerHTML = previewHTML;
+
+            // Build feature/target selection controls
+            let selectionHTML = '<h2>Select Features and Target</h2>';
+
+            // Features: Checkboxes for each column
+            selectionHTML += '<div><strong>Features:</strong><br>';
+            headers.forEach(col => {
+                selectionHTML += `<input type="checkbox" name="feature" value="${col}"> ${col}<br>`;
+            });
+            selectionHTML += '</div>';
+
+            // Target: Dropdown select (only one allowed)
+            selectionHTML += '<div style="margin-top: 0.5em;"><strong>Target:</strong><br>';
+            selectionHTML += '<select name="target">';
+            headers.forEach(col => {
+                selectionHTML += `<option value="${col}">${col}</option>`;
+            });
+            selectionHTML += '</select></div>';
+
+            // Add the Run Regression button
+            selectionHTML += '<button id="run-regression">Run Regression</button>';
+            document.getElementById("column-selection").innerHTML = selectionHTML;
+
+            // Attach event listener to the button
+            document.getElementById("run-regression").addEventListener("click", runRegression);
+        }
+
+        // Process CSV text: read CSV with Python, get headers and preview table.
+        async function processCSV(csvText) {
+            // Pass CSV text to Python (set as a global variable)
+            pyodideInstance.globals.set("csv_text", csvText);
+            await pyodideInstance.runPythonAsync(`
+import io
 import pandas as pd
-import matplotlib.pyplot as plt
-from sklearn.linear_model import LinearRegression
 
-# Read the CSV file
+# Read the CSV file from the uploaded text
 df = pd.read_csv(io.StringIO(csv_text))
 
-# Get CSV headers and preview HTML
+# Extract headers and generate HTML preview (first 5 rows)
 headers = list(df.columns)
-preview = df.head().to_html()
+preview = df.head().to_html(classes="csv-table", border=0)
+      `);
 
-# Initialize regression result variables
-r2 = None
-coef = None
-intercept = None
-img_data = None
+            // Retrieve headers and preview HTML from Python globals
+            const headers = pyodideInstance.globals.get("headers").toJs();
+            const preview = pyodideInstance.globals.get("preview");
 
-# Check if the expected columns exist
-if 'Value1' in df.columns and 'Value2' in df.columns:
-    # Prepare data for linear regression: Value1 -> independent, Value2 -> dependent
-    X = df[['Value1']].values
-    y = df['Value2'].values
+            // Update the UI with CSV preview and column selection options
+            updateUI(headers, preview);
+        }
+        // Run regression based on the selected features and target.
+        async function runRegression() {
+            // Get selected features and target from the UI.
+            const featureElements = document.querySelectorAll('input[name="feature"]:checked');
+            const features = Array.from(featureElements).map(el => el.value);
+            const targetSelect = document.querySelector('select[name="target"]');
+            const target = targetSelect ? targetSelect.value : "";
+
+            if (features.length === 0 || !target) {
+                alert("Please select at least one feature and a target.");
+                return;
+            }
+
+            // Display a loading message in the regression results area.
+            document.getElementById("regression-results").innerHTML = "<p>Running regression, please wait...</p>";
+
+            // Set the selected features and target as Python globals.
+            pyodideInstance.globals.set("selected_features", features);
+            pyodideInstance.globals.set("selected_target", target);
+
+            // Run Python code to perform the regression.
+            // We convert the results dictionary to JSON so that it converts cleanly to JS.
+            await pyodideInstance.runPythonAsync(`
+import numpy as np
+from sklearn.linear_model import LinearRegression
+import matplotlib.pyplot as plt
+import io, base64, json
+
+try:
+    # Use the global DataFrame 'df' (set when loading the CSV)
+    X = df[selected_features].values
+    y = df[selected_target].values
+
+    # Create and fit the linear regression model.
     model = LinearRegression()
     model.fit(X, y)
     y_pred = model.predict(X)
     r2 = model.score(X, y)
-    coef = model.coef_[0]
-    intercept = model.intercept_
+    coef = model.coef_.tolist()  # Convert array to list
+    # Convert intercept and r2 to native Python floats
+    intercept = float(model.intercept_)
+    r2 = float(r2)
     
-    # Create a scatter plot and regression line
-    plt.figure(figsize=(6,4))
-    plt.scatter(X, y, color='blue', label='Data')
-    plt.plot(X, y_pred, color='red', label='Fit')
-    plt.xlabel('Value1')
-    plt.ylabel('Value2')
-    plt.title('Linear Regression: Value1 vs Value2')
-    plt.legend()
-    buf = io.BytesIO()
-    plt.savefig(buf, format='png')
-    buf.seek(0)
-    img_data = base64.b64encode(buf.getvalue()).decode('utf-8')
-    plt.close()
-      `);
-
-      // Retrieve Python variables in JavaScript
-      const headers = pyodideInstance.globals.get("headers").toJs();
-      const preview = pyodideInstance.globals.get("preview");
-      const r2 = pyodideInstance.globals.get("r2");
-      const coef = pyodideInstance.globals.get("coef");
-      const intercept = pyodideInstance.globals.get("intercept");
-      const img_data = pyodideInstance.globals.get("img_data");
-
-      // Build the HTML to display results
-      let resultHTML = `
-        <h2>CSV Headers:</h2>
-        <p>${headers.join(", ")}</p>
-        <h2>Preview (First 5 Rows):</h2>
-        ${preview}
-      `;
-      if (r2 !== null && coef !== null && intercept !== null && img_data !== null) {
-        resultHTML += `
-          <h2>Linear Regression (Value1 vs Value2):</h2>
-          <p><strong>Coefficient:</strong> ${coef}</p>
-          <p><strong>Intercept:</strong> ${intercept}</p>
-          <p><strong>R-squared:</strong> ${r2}</p>
-          <img src="data:image/png;base64,${img_data}" alt="Regression Plot" style="max-width:100%; height:auto;" />
-        `;
-      } else {
-        resultHTML += `<p>No regression performed. Ensure your CSV has columns named "Value1" and "Value2".</p>`;
-      }
-      document.getElementById("results").innerHTML = resultHTML;
+    # Create a plot only if one feature is selected.
+    plot_data = None
+    if len(selected_features) == 1:
+        plt.figure(figsize=(6,4))
+        plt.scatter(X, y, color='blue', label='Data')
+        plt.plot(X, y_pred, color='red', label='Fit')
+        plt.xlabel(selected_features[0])
+        plt.ylabel(selected_target)
+        plt.title(f'Linear Regression: {selected_features[0]} vs {selected_target}')
+        plt.legend()
+        buf = io.BytesIO()
+        plt.savefig(buf, format='png')
+        buf.seek(0)
+        plot_data = base64.b64encode(buf.getvalue()).decode('utf-8')
+        plt.close()
+    
+    regression_results = {
+        "r2": r2,
+        "coef": coef,
+        "intercept": intercept,
+        "plot": plot_data,
+        "error": None
     }
+except Exception as e:
+    regression_results = {
+        "r2": None,
+        "coef": None,
+        "intercept": None,
+        "plot": None,
+        "error": str(e)
+    }
+# Convert the regression_results dict to JSON and store it globally.
+globals()['regression_results'] = json.dumps(regression_results)
+    `);
 
-    // Set up the file input change event (for when a file is selected via the dialog)
-    document.getElementById("csvInput").addEventListener("change", async (event) => {
-      const file = event.target.files[0];
-      if (file) {
-        const text = await file.text();
-        processCSV(text);
-      }
-    });
+            // Retrieve the JSON string from the Python global namespace and parse it.
+            const regressionResultsJSON = pyodideInstance.globals.get("regression_results");
+            const results = JSON.parse(regressionResultsJSON);
 
-    // Drag & Drop functionality
-    const dropArea = document.getElementById("drop-area");
+            // Build the HTML for regression results.
+            let resultsHTML = `<h2>Regression Results</h2>`;
+            if (results.error) {
+                resultsHTML += `<p style="color: red;"><strong>Error:</strong> ${results.error}</p>`;
+            } else {
+                resultsHTML += `<p><strong>Target:</strong> ${target}</p>`;
+                resultsHTML += `<p><strong>Features:</strong> ${features.join(", ")}</p>`;
+                resultsHTML += `<p><strong>Coefficient(s):</strong> ${results.coef}</p>`;
+                resultsHTML += `<p><strong>Intercept:</strong> ${results.intercept}</p>`;
+                resultsHTML += `<p><strong>R-squared:</strong> ${results.r2}</p>`;
 
-    dropArea.addEventListener("dragover", (e) => {
-      e.preventDefault();
-      dropArea.classList.add("hover");
-    });
+                if (results.plot) {
+                    resultsHTML += `<img src="data:image/png;base64,${results.plot}" alt="Regression Plot" style="max-width:100%; height:auto;" />`;
+                }
+            }
 
-    dropArea.addEventListener("dragleave", (e) => {
-      e.preventDefault();
-      dropArea.classList.remove("hover");
-    });
+            // Update the regression results area with the new results.
+            document.getElementById("regression-results").innerHTML = resultsHTML;
+        }
 
-    dropArea.addEventListener("drop", (e) => {
-      e.preventDefault();
-      dropArea.classList.remove("hover");
-      const file = e.dataTransfer.files[0];
-      if (file) {
-        file.text().then((text) => {
-          processCSV(text);
+        // Set up the file input change event (for when a file is selected via the dialog)
+        document.getElementById("csvInput").addEventListener("change", async (event) => {
+            const file = event.target.files[0];
+            if (file) {
+                const text = await file.text();
+                processCSV(text);
+            }
         });
-      }
-    });
 
-    // Allow clicking the drop area to open the file selector
-    dropArea.addEventListener("click", () => {
-      document.getElementById("csvInput").click();
-    });
-  </script>
+        // Drag & Drop functionality
+        const dropArea = document.getElementById("drop-area");
+
+        dropArea.addEventListener("dragover", (e) => {
+            e.preventDefault();
+            dropArea.classList.add("hover");
+        });
+
+        dropArea.addEventListener("dragleave", (e) => {
+            e.preventDefault();
+            dropArea.classList.remove("hover");
+        });
+
+        dropArea.addEventListener("drop", (e) => {
+            e.preventDefault();
+            dropArea.classList.remove("hover");
+            const file = e.dataTransfer.files[0];
+            if (file) {
+                file.text().then((text) => {
+                    processCSV(text);
+                });
+            }
+        });
+
+        // Allow clicking the drop area to open the file selector
+        dropArea.addEventListener("click", () => {
+            document.getElementById("csvInput").click();
+        });
+    </script>
 </body>
+
 </html>
