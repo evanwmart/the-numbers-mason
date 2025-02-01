@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>The numbers Mason!</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 2em;
+    }
+    #results {
+      margin-top: 1em;
+      padding: 1em;
+      border: 1px solid #ddd;
+      background-color: #f9f9f9;
+    }
+    #loading {
+      color: #555;
+      margin-bottom: 1em;
+    }
+  </style>
+  <script src="https://cdn.jsdelivr.net/pyodide/v0.23.0/full/pyodide.js"></script>
+</head>
+<body>
+  <h1>Pyodide CSV Upload Example</h1>
+  <div id="loading">Loading Pyodide, please wait...</div>
+  <input type="file" id="csvInput" accept=".csv" />
+  <div id="results"></div>
+
+  <script>
+    // Global variable for Pyodide instance
+    let pyodideInstance = null;
+
+    // Asynchronously load Pyodide
+    async function loadPyodideAndPackages() {
+      pyodideInstance = await loadPyodide();
+      document.getElementById("loading").innerText = "Pyodide loaded. You can now upload a CSV file.";
+    }
+
+    loadPyodideAndPackages();
+
+    // Listen for CSV file uploads
+    document.getElementById("csvInput").addEventListener("change", async (event) => {
+      const file = event.target.files[0];
+      if (!file) return;
+
+      // Read the file as text
+      const text = await file.text();
+
+      // Pass the CSV text to Python and use Pandas to process it.
+      // For now, we will simply read the CSV and display its headers and first few rows.
+      pyodideInstance.globals.set("csv_text", text);
+      await pyodideInstance.runPythonAsync(`
+import io
+import pandas as pd
+
+# Read CSV from the uploaded text
+df = pd.read_csv(io.StringIO(csv_text))
+
+# Extract headers and a preview (first 5 rows) of the DataFrame
+headers = list(df.columns)
+preview = df.head().to_html()
+      `);
+
+      // Retrieve the Python variables to JavaScript
+      const headers = pyodideInstance.globals.get("headers").toJs();
+      const preview = pyodideInstance.globals.get("preview");
+
+      // Display the results on the page
+      document.getElementById("results").innerHTML = `
+        <h2>CSV Headers:</h2>
+        <p>${headers.join(", ")}</p>
+        <h2>Preview (First 5 Rows):</h2>
+        ${preview}
+      `;
+    });
+  </script>
+</body>
+</html>
